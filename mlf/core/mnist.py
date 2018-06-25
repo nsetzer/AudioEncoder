@@ -45,26 +45,27 @@ class MnistDataset(Dataset):
         train_data = mnist.train.images  # Returns np.array
         train_labels = np.asarray(mnist.train.labels, dtype=np.int32)
 
+        print(len(self.classes), train_data.shape, train_labels.shape)
         # select the classes to train on (default all)
         if nClasses != 10:
             indices = np.hstack([np.where(train_labels==c) for c in self.classes])
             train_labels = train_labels[indices][0]
             train_data = train_data[indices][0]
+            print(train_data.shape, train_labels.shape)
 
         #shuffle training classes
         train_data, train_labels = unison_shuffled_copies(train_data, train_labels)
 
+        print(train_data.shape)
         mean = np.mean(train_data)
+        train_data = (train_data - mean)
         _min = np.min(train_data)
         _max = np.max(train_data)
+        train_data = train_data / max(abs(_min), abs(_max))
         _var = np.var(train_data)
         _std = np.std(train_data)
-        # TODO: revisit normalization for non-mnist data sets
-        # it may not be a good idea.
-        # if we want a generalizeable model: no
-        # if we want to build a model on the entire dataset: yes
         print("data mean", _min, mean, _max, _var, _std)
-        train_data = (train_data - mean) / _std
+
         # create a 1-hot encoding mapping
         eye = []
         for i in range(10):
@@ -80,10 +81,16 @@ class MnistDataset(Dataset):
         train_labels = eye[train_labels]
 
         test_data = mnist.test.images  # Returns np.array
+
         mean = np.mean(test_data)
-        _mean = np.std(test_data)
-        print("mean", mean, _std)
-        test_data = (test_data - mean) / _std
+        test_data = (test_data - mean)
+        _min = np.min(test_data)
+        _max = np.max(test_data)
+        test_data = test_data / max(abs(_min), abs(_max))
+        _var = np.var(test_data)
+        _std = np.std(test_data)
+        print("data mean", _min, mean, _max, _var, _std)
+
         test_labels = np.asarray(mnist.test.labels, dtype=np.int32)
 
         if nClasses != 10:

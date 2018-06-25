@@ -9,7 +9,7 @@ from .core.mnist import MnistDataset
 from .core.dataset import Dataset
 from .core.config import AutoEncoderConfig
 from .models.autoencoder import autoencoder_fn
-
+from .models.vae import vae_fn
 
 import tensorflow as tf
 from tensorflow.contrib.tensorboard.plugins import projector
@@ -167,9 +167,12 @@ class Trainer(object):
         embedded_labels = []
         for i in range(self.settings['n_test_samples']):
             try:
-                data, _, uid = sess.run(embed_op)
-                # label = self.dataset.oneHot2Label(label[0])
-                uid = uid[0][0].decode("utf-8")
+                data, label, uid = sess.run(embed_op)
+                # some data sets may not define a uid
+                if uid.size > 0:
+                    label = uid[0][0].decode("utf-8")
+                else:
+                    label = self.dataset.oneHot2Label(label[0])
                 embedded_data.append(data.reshape([-1, self.settings['dimensions'][-1]]))
                 embedded_labels.append(uid)
             except tf.errors.OutOfRangeError:
@@ -245,11 +248,13 @@ class Trainer(object):
 
                 feat_max = feat.max()
                 feat_min = feat.min()
-                feat = AutomaticScale(feat.reshape([width, height]))
+                feat = feat.reshape([width, height])
+                #feat = AutomaticScale(feat)
 
                 dec_max = dec.max()
                 dec_min = dec.min()
-                dec = AutomaticScale(dec.reshape([width, height]))
+                dec = dec.reshape([width, height])
+                #dec = AutomaticScale(dec)
 
                 x1 = i * width
                 x2 = (i + 1) * width
@@ -342,7 +347,7 @@ def main():
     logging.basicConfig(level=logging.INFO)
 
     cfg = AutoEncoderConfig()
-    cfg.load("./config/audio_10way.cfg")
+    cfg.load("./config/audio_2way.cfg")
 
 
     mnist_settings = {
@@ -369,19 +374,19 @@ def main():
         "n_test_samples": 5000,
     }
 
-    settings = audio_settings
+    settings = mnist_settings # audio_settings
 
     settings['checkpointFile'] = os.path.join(settings['outputDir'], 'model.ckpt')
 
     if not os.path.exists(settings['dataDir']):
         os.makedirs(settings['dataDir'])
 
-    #dataset = MnistDataset(settings['dataDir'], settings['classes'])
+    dataset = MnistDataset(settings['dataDir'], settings['classes'])
 
-    dataset = AudioDataset(cfg)
+    # dataset = AudioDataset(cfg)
 
     _, nFeatures = dataset.shape(None, flat=True)
-    settings['dimensions'] = [nFeatures, 256, 64]
+    settings['dimensions'] = [nFeatures, 128]
 
     print(settings)
     print(settings['dimensions'])
