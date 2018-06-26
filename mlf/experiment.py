@@ -8,8 +8,9 @@ import logging
 from .core.mnist import MnistDataset
 from .core.dataset import Dataset
 from .core.config import AutoEncoderConfig
-from .models.autoencoder import autoencoder_fn
+from .models.autoencoder import autoencoder
 from .models.vae import vae_fn
+from .models.rnn import lstm
 
 import tensorflow as tf
 from tensorflow.contrib.tensorboard.plugins import projector
@@ -19,7 +20,10 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from SigProc.histogrammer import AutomaticScale
+try:
+    from SigProc.histogrammer import AutomaticScale
+except ImportError as e:
+    print(e)
 
 class AudioDataset(Dataset):
     def __init__(self, cfg):
@@ -40,48 +44,10 @@ class AudioDataset(Dataset):
         index = np.where(np.asarray(y) == 1)[0][0]
         return self.cfg.getGenres()[index]
 
-class Trainer(object):
-    """docstring for Trainer"""
-    def __init__(self, model_fn):
-        super(Trainer, self).__init__()
+class TrainerBase(object):
 
-        self.model_fn = model_fn
-
-        self.actions = {
-            "project": self.project,
-            "sample": self.sample,
-        }
-
-    def makeGraph(self, settings, dataset):
-
-        self.settings = settings
-        self.dataset = dataset
-
-        self.seed = tf.placeholder(tf.int64, shape=tuple(), name="seed")
-
-        logging.info("create training graph")
-        featTrain, labelTrain, uidTrain = dataset.getTrain(settings['batch_size'], self.seed)
-        self.train_ops = self.model_fn(featTrain,
-            settings['dimensions'], reuse=False)
-
-        logging.info("create dev graph")
-        featDev, labelDev, uidDev = dataset.getDev(settings['batch_size'], self.seed)
-        self.dev_ops = self.model_fn(featDev,
-            settings['dimensions'], reuse=True)
-
-        logging.info("create test graph")
-        featTest, labelTest, uidTest = dataset.getTest()
-        self.test_ops = self.model_fn(featTest,
-            settings['dimensions'], reuse=True)
-
-        logging.info("create optimzer: adam")
-        self.optimizer = tf.train.AdamOptimizer(
-            settings['learning_rate']).minimize(self.train_ops['cost'])
-
-        self.init_op = tf.group(tf.global_variables_initializer(),
-                                tf.local_variables_initializer())
-
-        self.saver = tf.train.Saver(max_to_keep=None)
+    def __init__(self):
+        super(TrainerBase, self).__init__()
 
     def checkpointExists(self):
 
@@ -91,6 +57,12 @@ class Trainer(object):
     def restore(self, sess):
         self.saver.restore(sess,
                 tf.train.latest_checkpoint(self.settings['outputDir']))
+
+    def beforeSession(self):
+        self.init_op = tf.group(tf.global_variables_initializer(),
+                                tf.local_variables_initializer())
+
+        self.saver = tf.train.Saver(max_to_keep=None)
 
     def train(self, sess):
 
@@ -110,11 +82,13 @@ class Trainer(object):
             sess.run(self.dataset.initializer(),
                    feed_dict={self.seed: epoch_i})
 
+            self.onEpochBegin(sess, epoch_i)
+
             step = 0
             total_cost = 0
             while True:
                 try:
-                    _, cost = sess.run([self.optimizer,
+                    _, cost = sess.run([self.train_op,
                         self.train_ops['cost']])
                     total_cost += cost
                     step += 1
@@ -145,7 +119,100 @@ class Trainer(object):
             self.saver.save(sess, self.settings['checkpointFile'],
                 global_step=epoch_i)
 
-            self.sample(sess, epoch_i)
+            self.onEpochEnd(sess, epoch_i)
+
+    def export(self, ckpt=None):
+        """
+
+        """
+
+        ckpt = ckpt or tf.train.latest_checkpoint(self.settings['outputDir'])
+
+        logging.info("Exporting model using %s" % ckpt)
+
+        tf.reset_default_graph()
+
+        evalOutputDir = os.path.join(self.settings['outputDir'], 'eval')
+
+        if not os.path.exists(evalOutputDir):
+            os.makedirs(evalOutputDir)
+
+        init_op = tf.group(tf.global_variables_initializer(),
+            tf.local_variables_initializer(), name="INIT")
+
+        batch_size = 1  # TODO, can this be None or -1 for arbitrary?
+        shape = self.dataset.shape(batch_size, flat=True)
+        featEval = tf.placeholder(tf.float32, shape, name='INPUT')
+        eval_ops = self.model_fn(featEval,
+            self.settings['dimensions'], reuse=False)
+
+        # -------------------------------------------------------------------------
+        # Export model
+        # -------------------------------------------------------------------------
+        saver = tf.train.Saver()
+        modelFile = 'model.pbtxt'
+
+        model_ckpt = os.path.join(evalOutputDir, 'model.ckpt')
+        with tf.Session() as sess:
+            sess.run(init_op)
+
+            saver.restore(sess, ckpt)
+
+            saver.save(sess, model_ckpt,
+                       write_meta_graph=False)
+
+            tf.train.write_graph(
+                sess.graph.as_graph_def(),
+                evalOutputDir,
+                modelFile,
+                as_text=True
+            )
+
+    def onEpochBegin(self, sess, index):
+        pass
+
+    def onEpochEnd(self, sess, index):
+        pass
+
+class EncoderTrainer(TrainerBase):
+
+    def __init__(self, model_fn):
+        super(EncoderTrainer, self).__init__()
+
+        self.model_fn = model_fn
+
+        self.actions = {
+            "project": self.project,
+            "sample": self.sample,
+        }
+
+    def makeGraph(self, settings, dataset):
+
+        self.settings = settings
+        self.dataset = dataset
+
+        self.seed = tf.placeholder(tf.int64, shape=tuple(), name="seed")
+
+        logging.info("create training graph")
+        featTrain, labelTrain, uidTrain = dataset.getTrain(settings['batch_size'], self.seed)
+        self.train_ops = self.model_fn(featTrain, labelTrain,
+            reuse=False, isTraining=True)
+
+        logging.info("create dev graph")
+        featDev, labelDev, uidDev = dataset.getDev(settings['batch_size'], self.seed)
+        self.dev_ops = self.model_fn(featDev, labelDev,
+            reuse=True, isTraining=False)
+
+        logging.info("create test graph")
+        featTest, labelTest, uidTest = dataset.getTest()
+        self.test_ops = self.model_fn(featTest, labelTest,
+            reuse=True, isTraining=False)
+
+        logging.info("create optimzer: adam")
+        self.global_step = tf.Variable(0, name='global_step', trainable=False)
+        self.optimizer = tf.train.AdamOptimizer(settings['learning_rate'])
+        self.train_op = self.optimizer.minimize(self.train_ops['cost'],
+            global_step=self.global_step)
 
     def project(self, sess):
 
@@ -278,52 +345,14 @@ class Trainer(object):
         plt.imshow(canvas_recon, origin="upper", cmap="gray")
         plt.savefig(os.path.join(self.settings['outputDir'], "img_%02d_reconstructed.png" % uid))
 
-    def export(self, ckpt = None):
-        """
+    def onEpochEnd(self, sess, index):
 
-        """
+        self.sample(sess, index)
 
-        ckpt = ckpt or tf.train.latest_checkpoint(self.settings['outputDir'])
+class ClassifierTrainer(TrainerBase):
 
-        logging.info("Exporting model using %s" % ckpt)
-
-        tf.reset_default_graph()
-
-        evalOutputDir = os.path.join(self.settings['outputDir'], 'eval')
-
-        if not os.path.exists(evalOutputDir):
-            os.makedirs(evalOutputDir)
-
-        init_op = tf.group(tf.global_variables_initializer(),
-            tf.local_variables_initializer(), name="INIT")
-
-        batch_size = 1 #TODO, can this be None or -1 for arbitrary?
-        shape = self.dataset.shape(batch_size, flat=True)
-        featEval = tf.placeholder(tf.float32, shape, name='INPUT')
-        eval_ops = self.model_fn(featEval,
-            self.settings['dimensions'], reuse=False)
-
-        # -------------------------------------------------------------------------
-        # Export model
-        # -------------------------------------------------------------------------
-        saver = tf.train.Saver()
-        modelFile = 'model.pbtxt'
-
-        model_ckpt = os.path.join(evalOutputDir, 'model.ckpt')
-        with tf.Session() as sess:
-            sess.run(init_op)
-
-            saver.restore(sess, ckpt)
-
-            saver.save(sess, model_ckpt,
-                       write_meta_graph=False)
-
-            tf.train.write_graph(
-                sess.graph.as_graph_def(),
-                evalOutputDir,
-                modelFile,
-                as_text=True
-            )
+    def __init__(self):
+        super(ClassifierTrainer, self).__init__()
 
 def train(settings, trainer, dataset):
 
@@ -331,6 +360,7 @@ def train(settings, trainer, dataset):
 
     do_export = False
 
+    trainer.beforeSession();
     with tf.Session() as sess:
 
         if trainer.checkpointExists():
@@ -362,17 +392,17 @@ def main():
         "n_test_samples": 5000,
     }
 
-    audio_settings = {
-        "dataDir": os.path.abspath("./data"),
-        "outputDir": os.path.abspath("./build/experiment"),
-        "modelFile": "model.pb",
-        "classes": cfg.getGenres(),
-        "learning_rate": 0.001,
-        "nEpochs": 10,
-        "batch_size": 30,
-        "max_steps": 0,
-        "n_test_samples": 5000,
-    }
+    #audio_settings = {
+    #    "dataDir": os.path.abspath("./data"),
+    #    "outputDir": os.path.abspath("./build/experiment"),
+    #    "modelFile": "model.pb",
+    #    "classes": cfg.getGenres(),
+    #    "learning_rate": 0.001,
+    #    "nEpochs": 10,
+    #    "batch_size": 30,
+    #    "max_steps": 0,
+    #    "n_test_samples": 5000,
+    #}
 
     settings = mnist_settings # audio_settings
 
@@ -391,7 +421,9 @@ def main():
     print(settings)
     print(settings['dimensions'])
     print(dataset.train_path)
-    trainer = Trainer(autoencoder_fn)
+    # lstm_fn = lstm(nFeatures=28*28, nClasses=len(settings['classes']))
+    autoencoder_fn = autoencoder(settings['dimensions'])
+    trainer = EncoderTrainer(autoencoder_fn)
     train(settings, trainer, dataset)
 
 if __name__ == '__main__':
