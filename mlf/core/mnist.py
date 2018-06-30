@@ -56,15 +56,15 @@ class MnistDataset(Dataset):
         #shuffle training classes
         train_data, train_labels = unison_shuffled_copies(train_data, train_labels)
 
-        print(train_data.shape)
-        mean = np.mean(train_data)
-        train_data = (train_data - mean)
-        _min = np.min(train_data)
-        _max = np.max(train_data)
-        train_data = train_data / max(abs(_min), abs(_max))
-        _var = np.var(train_data)
-        _std = np.std(train_data)
-        print("data mean", _min, mean, _max, _var, _std)
+        #print(train_data.shape)
+        #mean = np.mean(train_data)
+        #train_data = (train_data - mean)
+        #_min = np.min(train_data)
+        #_max = np.max(train_data)
+        #train_data = train_data / max(abs(_min), abs(_max))
+        #_var = np.var(train_data)
+        #_std = np.std(train_data)
+        #print("data mean", _min, mean, _max, _var, _std)
 
         # create a 1-hot encoding mapping
         eye = []
@@ -82,14 +82,14 @@ class MnistDataset(Dataset):
 
         test_data = mnist.test.images  # Returns np.array
 
-        mean = np.mean(test_data)
-        test_data = (test_data - mean)
-        _min = np.min(test_data)
-        _max = np.max(test_data)
-        test_data = test_data / max(abs(_min), abs(_max))
-        _var = np.var(test_data)
-        _std = np.std(test_data)
-        print("data mean", _min, mean, _max, _var, _std)
+        #mean = np.mean(test_data)
+        #test_data = (test_data - mean)
+        #_min = np.min(test_data)
+        #_max = np.max(test_data)
+        #test_data = test_data / max(abs(_min), abs(_max))
+        #_var = np.var(test_data)
+        #_std = np.std(test_data)
+        #print("data mean", _min, mean, _max, _var, _std)
 
         test_labels = np.asarray(mnist.test.labels, dtype=np.int32)
 

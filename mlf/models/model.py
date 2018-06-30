@@ -2,15 +2,19 @@
 
 class Model(object):
     """docstring for Model"""
-    def __init__(self):
+    def __init__(self, **kwargs):
         super(Model, self).__init__()
-        self.settings = {}
+        self.settings = self.defaultSettings()
+        self.updateSettings(kwargs)
+
+    def defaultSettings(self):
+        return {}
 
     def updateSettings(self, kwargs):
 
         for key, value in kwargs.items():
-            if key in settings:
-                settings[key] = value
+            if key in self.settings:
+                self.settings[key] = value
             else:
                 raise AttributeError(key)
 

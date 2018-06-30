@@ -1,6 +1,7 @@
 """
 https://github.com/shaohua0116/VAE-Tensorflow/blob/master/demo.py
 https://wiseodd.github.io/techblog/2016/12/10/variational-autoencoder/
+https://github.com/shaohua0116/VAE-Tensorflow
 """
 
 import tensorflow as tf
@@ -18,20 +19,21 @@ def vae_fn(x, dimensions, reuse=False):
     # for sigmoid activation,
     # assume x is zero mean, between -1 and 1
     # convert to range o..1
-    x = tf.add(tf.multiply(x, .5), 0.5)
-    input_dim = dimensions[0]
-    x = tf.reshape(x, [-1, input_dim])
-    print(x.shape)
-    n_z = dimensions[-1]
+    #x = tf.add(tf.multiply(x, .5), 0.5)
+
+    batch_size=-1
+    x = tf.reshape(x, [batch_size, dimensions[0]])
+
     # Encode
     # x -> z_mean, z_sigma -> z
     with tf.variable_scope('ENCODER', reuse=reuse):
-
-        f1 = fc(x, 256, reuse=reuse, scope='enc_fc1', activation_fn=tf.nn.elu)
-        f2 = fc(f1, 128, reuse=reuse, scope='enc_fc2', activation_fn=tf.nn.elu)
-        f3 = fc(f2, 64, reuse=reuse, scope='enc_fc3', activation_fn=tf.nn.elu)
-        z_mu = fc(f3, n_z, reuse=reuse, scope='enc_fc4_mu', activation_fn=None)
-        z_log_sigma_sq = fc(f3, n_z, reuse=reuse, scope='enc_fc4_sigma', activation_fn=None)
+        # input, 512, 256, 128
+        # x, 512 -> x, 256 -> x, 128
+        c = x
+        for i, dim in enumerate(dimensions[1:-1]):
+            c = fc(c, dim, reuse=reuse, scope='enc_fc_%d' % i, activation_fn=tf.nn.elu)
+        z_mu = fc(c, dimensions[-1], reuse=reuse, scope='enc_fc_mu', activation_fn=None)
+        z_log_sigma_sq = fc(c, dimensions[-1], reuse=reuse, scope='enc_fc_sigma', activation_fn=None)
         eps = tf.random_normal(shape=tf.shape(z_log_sigma_sq),
                                mean=0, stddev=1, dtype=tf.float32)
         z_prime = tf.sqrt(tf.exp(z_log_sigma_sq)) * eps
@@ -42,10 +44,10 @@ def vae_fn(x, dimensions, reuse=False):
 
     with tf.variable_scope('DECODER', reuse=reuse):
 
-        g1 = fc(z, 64, reuse=reuse, scope='dec_fc1', activation_fn=tf.nn.elu)
-        g2 = fc(g1, 128, reuse=reuse, scope='dec_fc2', activation_fn=tf.nn.elu)
-        g3 = fc(g2, 256, reuse=reuse, scope='dec_fc3', activation_fn=tf.nn.elu)
-        y = fc(g3, input_dim, reuse=reuse, scope='OUTPUT_0',
+        c = z
+        for i, dim in enumerate(reversed(dimensions[:-1])):
+            c = fc(c, dim, reuse=reuse, scope='dec_fc1', activation_fn=tf.nn.elu)
+        y = fc(c, dimensions[0], reuse=reuse, scope='OUTPUT_0',
             activation_fn=tf.sigmoid)
 
     # Loss

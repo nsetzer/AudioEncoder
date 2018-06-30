@@ -10,7 +10,8 @@ from .core.dataset import Dataset
 from .core.config import AutoEncoderConfig
 from .models.autoencoder import autoencoder
 from .models.vae import vae_fn
-from .models.rnn import lstm
+from .tools.freeze import freeze
+# from .models.rnn import lstm
 
 import tensorflow as tf
 from tensorflow.contrib.tensorboard.plugins import projector
@@ -151,6 +152,8 @@ class TrainerBase(object):
         # -------------------------------------------------------------------------
         saver = tf.train.Saver()
         modelFile = 'model.pbtxt'
+        modelPath = os.path.join(evalOutputDir, modelFile)
+        frozenModelPath = os.path.join(evalOutputDir, "frozen_model.pb")
 
         model_ckpt = os.path.join(evalOutputDir, 'model.ckpt')
         with tf.Session() as sess:
@@ -167,6 +170,21 @@ class TrainerBase(object):
                 modelFile,
                 as_text=True
             )
+
+        export_ops = list(eval_ops.values())
+        export_ops.insert(0,init_op)
+        export_names = ','.join([op.name.split(":")[0] for op in export_ops])
+        ckpt = tf.train.latest_checkpoint(evalOutputDir)
+        print("-"*60)
+        print("path: %s" % modelPath)
+        print("path: %s" % frozenModelPath)
+        print("freeze: %s" % export_names)
+        print("checkpint: %s" % ckpt)
+        print("-"*60)
+
+        # freeze weights along with the graph, so that it can be used
+        # with the C API
+        freeze(modelPath, frozenModelPath, ckpt, export_names)
 
     def onEpochBegin(self, sess, index):
         pass
@@ -362,7 +380,6 @@ def train(settings, trainer, dataset):
 
     trainer.beforeSession();
     with tf.Session() as sess:
-
         if trainer.checkpointExists():
             trainer.restore(sess)
         else:
@@ -381,7 +398,7 @@ def main():
 
 
     mnist_settings = {
-        "dataDir": os.path.abspath("./data"),
+        "dataDir": os.path.abspath("./build/data"),
         "outputDir": os.path.abspath("./build/experiment"),
         "modelFile": "model.pb",
         "classes": list(range(10)), # [4,9],
@@ -422,7 +439,7 @@ def main():
     print(settings['dimensions'])
     print(dataset.train_path)
     # lstm_fn = lstm(nFeatures=28*28, nClasses=len(settings['classes']))
-    autoencoder_fn = autoencoder(settings['dimensions'])
+    autoencoder_fn = autoencoder(dimensions=settings['dimensions'])
     trainer = EncoderTrainer(autoencoder_fn)
     train(settings, trainer, dataset)
 
