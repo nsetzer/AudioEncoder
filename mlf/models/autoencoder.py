@@ -17,7 +17,7 @@ class autoencoder(Model):
             # last dimensions is the shape of the latent layer
             "dimensions": None
         }
-        return settings;
+        return settings
 
     def __call__(self, x, y, reuse=False, isTraining=False):
         """Build a deep autoencoder w/ tied weights.

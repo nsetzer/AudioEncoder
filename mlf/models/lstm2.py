@@ -1,38 +1,54 @@
 
+from .model import Model
+import tensorflow as tf
+import numpy as np
 
 class lstm2(Model):
-    """docstring for autoencoder"""
     def __init__(self, **kwargs):
-        super(autoencoder, self).__init__()
+        super(lstm2, self).__init__(**kwargs)
 
-        self.settings = {
-            "nClasses": None
+    def defaultSettings(self):
+        settings = {
+            "nClasses": None,
             "nRecurrentUnits": 100,
+            "batch_size": None,
         }
-        self.dimensions = kwargs
-
-        self.updateSettings()
+        return settings
 
     def __call__(self, x, y, reuse=False, isTraining=False):
 
-        n_classes = settings['nClasses']
-        n_hidden = settings['nRecurrentUnits']
+        n_classes = self.settings['nClasses']
+        n_hidden = self.settings['nRecurrentUnits']
+
+        # TODO: pass in width and height
+        x = tf.reshape(x, [self.settings['batch_size'], -1, 28])
 
         wshape = [n_hidden, n_classes]
-        weight = tf.Variable(tf.truncated_normal(wshape, stddev = 0.1))
+        weight = tf.Variable(tf.truncated_normal(wshape, stddev=0.1))
 
         bshape = [n_classes]
-        bias = tf.Variable(tf.constant(0.0, shape = bshape))
+        bias = tf.Variable(tf.constant(0.0, shape=bshape))
 
-        cell = rnn_cell.LSTMCell(n_hidden, state_is_tuple = True)
+        cell = tf.nn.rnn_cell.LSTMCell(n_hidden, state_is_tuple=True)
         multi_layer_cell = tf.nn.rnn_cell.MultiRNNCell([cell] * 2)
-        output, state = tf.nn.dynamic_rnn(multi_layer_cell, x, dtype = tf.float32)
+        output, state = tf.nn.dynamic_rnn(multi_layer_cell, x, dtype=tf.float32)
         output_flattened = tf.reshape(output, [-1, n_hidden])
-        output_logits = tf.add(tf.matmul(output_flattened,weight),bias)
+        output_logits = tf.add(tf.matmul(output_flattened, weight), bias)
         output_all = tf.nn.sigmoid(output_logits)
-        output_reshaped = tf.reshape(output_all,[-1,n_steps,n_classes])
-        output_last = tf.gather(tf.transpose(output_reshaped,[1,0,2]), n_steps - 1)
+        output_reshaped = tf.reshape(output_all, [-1, n_steps, n_classes])
+        output_last = tf.gather(tf.transpose(output_reshaped, [1, 0, 2]), n_steps - 1)
         #output = tf.transpose(output, [1, 0, 2])
         #last = tf.gather(output, int(output.get_shape()[0]) - 1)
         #output_last = tf.nn.sigmoid(tf.matmul(last, weight) + bias)
-        return output_logits, output_last, output_all
+        cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
+            logits=output_logits, labels=y))
+
+        ops = {
+            "x": x,
+            "y": y,
+            "logits": output_logits,
+            "prediction": output_last,
+            "classes": output_all,
+            "cost": cost,
+        }
+        return opd

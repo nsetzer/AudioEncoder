@@ -11,7 +11,7 @@ from .core.config import AutoEncoderConfig
 from .models.autoencoder import autoencoder
 from .models.vae import vae_fn
 from .tools.freeze import freeze
-# from .models.rnn import lstm
+from .models.lstm2 import lstm2
 
 import tensorflow as tf
 from tensorflow.contrib.tensorboard.plugins import projector
@@ -44,6 +44,123 @@ class AudioDataset(Dataset):
     def oneHot2Label(self, y):
         index = np.where(np.asarray(y) == 1)[0][0]
         return self.cfg.getGenres()[index]
+
+class ClassificationMetricsCalculator(object):
+    """docstring for ClassificationMetricsCalculator"""
+    _counter = 0
+    def __init__(self, nClasses, initializer, logits, labels, name=None):
+        super(ClassificationMetricsCalculator, self).__init__()
+
+        if name is None:
+            ClassificationMetricsCalculator._counter += 1
+            name = "ClassificationMetricsCalculator-%03d" % (
+                ClassificationMetricsCalculator._counter)
+
+        self.name = name
+        self.initializer = initializer
+        self.nClasses = nClasses
+        self.logits = logits
+        self.labels = labels
+
+        self._init()
+
+    def _init(self):
+        y_true = tf.argmax(self.labels, 1)
+        y_pred = tf.argmax(self.logits, 1)
+
+        recall = [0] * self.nClasses
+        update_op_rec = [None] * self.nClasses
+        precision = [0] * self.nClasses
+        update_op_prec = [None] * self.nClasses
+
+        with tf.name_scope(self.name):
+
+            for k in range(self.nClasses):
+                y1 = tf.equal(y_true, k)
+                y2 = tf.equal(y_pred, k)
+                recall[k], update_op_rec[k] = tf.metrics.recall(
+                    labels=y1, predictions=y2)
+                precision[k], update_op_prec[k] = tf.metrics.precision(
+                    labels=y1, predictions=y2)
+
+            conf_mat_update, conf_mat = self._streamingConfMatrix(
+                y_pred,
+                y_true,
+                self.nClasses)
+
+        metric_vars = tf.get_collection(
+            tf.GraphKeys.LOCAL_VARIABLES, scope=self.name)
+
+        metric_init_op = tf.variables_initializer(var_list=metric_vars)
+
+        self.op_init = [metric_init_op]
+        if self.initializer is not None:
+            self.op_init.append(self.initializer)
+
+        self.op_update = (update_op_rec, update_op_prec, conf_mat_update)
+        self.op_compute = (recall, precision, conf_mat)
+
+    def _streamingConfMatrix(prediction, label, nClasses):
+
+        with tf.name_scope("conf_matrix"):
+            # Compute a per-batch confusion
+            batch_confusion = tf.confusion_matrix(
+                label,
+                prediction,
+                num_classes=nClasses,
+                name='batch_confusion'
+            )
+
+            # Create an accumulator variable to hold the counts
+            confusion = tf.Variable(
+                tf.zeros([nClasses, nClasses],
+                         dtype=tf.int32),
+                name='confusion',
+                collections=[tf.GraphKeys.LOCAL_VARIABLES]
+            )
+
+            # Create the update op for doing a "+=" accumulation on the batch
+            confusion_update = confusion.assign(confusion + batch_confusion)
+
+        return confusion_update, confusion
+
+    def run(self, session):
+
+        session.run(self.op_init)
+
+        try:
+            while True:
+                session.run(self.op_update)
+
+        except tf.errors.OutOfRangeError:
+            self._proc(*session.run(self.op_compute))
+
+    def _proc(self, recall, precision, confmat):
+        precision = np.array(precision)
+        recall = np.array(recall)
+        confmat = np.array(confmat)
+        F1 = 2 * ((precision * recall) / (precision + recall))
+
+        srecall = ', '.join(["%0.6f" % v for v in recall])
+        sprecision = ', '.join(["%0.6f" % v for v in precision])
+        sF1 = ', '.join(["%0.6f" % v for v in F1])
+
+        print("recall   : (%.6f) %s" % (np.mean(recall), srecall))
+        print("precision: (%.6f) %s" % (np.mean(precision), sprecision))
+        print("F1       : (%.6f) %s" % (np.mean(F1), sF1))
+
+        # determine maximum vlaue in the confusion matrix, for alignment
+        n = len("%s" % np.max(confmat))
+        fmt = "%%%dd" % n
+
+        # print a header for the confusion matrix
+        s = " | ".join([fmt % i for i in range(self.nClasses)])
+        print(" " * n + "   " + s + " |")
+
+        # print confusion matrix data
+        for i, row in enumerate(confmat):
+            s = " | ".join([fmt % v for v in row])
+            print(fmt % i + " | " + s + " |")
 
 class TrainerBase(object):
 
@@ -144,8 +261,7 @@ class TrainerBase(object):
         batch_size = 1  # TODO, can this be None or -1 for arbitrary?
         shape = self.dataset.shape(batch_size, flat=True)
         featEval = tf.placeholder(tf.float32, shape, name='INPUT')
-        eval_ops = self.model_fn(featEval,
-            self.settings['dimensions'], reuse=False)
+        eval_ops = self.model_fn(featEval, None, reuse=False, isTraining=False)
 
         # -------------------------------------------------------------------------
         # Export model
@@ -192,17 +308,40 @@ class TrainerBase(object):
     def onEpochEnd(self, sess, index):
         pass
 
+    def onTrainStart(self, sess):
+        pass
+
+    def onTrainEnd(self, sess):
+        pass
+
+    def run(self, settings, dataset):
+
+        self.makeGraph(settings, dataset)
+
+        do_export = False
+
+        self.beforeSession()
+        with tf.Session() as sess:
+
+            self.onTrainStart(sess)
+
+            if self.checkpointExists():
+                self.restore(sess)
+            else:
+                self.train(sess)
+                do_export = True
+
+            self.onTrainEnd(sess)
+
+        if do_export:
+            self.export()
+
 class EncoderTrainer(TrainerBase):
 
     def __init__(self, model_fn):
         super(EncoderTrainer, self).__init__()
 
         self.model_fn = model_fn
-
-        self.actions = {
-            "project": self.project,
-            "sample": self.sample,
-        }
 
     def makeGraph(self, settings, dataset):
 
@@ -226,7 +365,7 @@ class EncoderTrainer(TrainerBase):
         self.test_ops = self.model_fn(featTest, labelTest,
             reuse=True, isTraining=False)
 
-        logging.info("create optimzer: adam")
+        logging.info("create optimizer: adam")
         self.global_step = tf.Variable(0, name='global_step', trainable=False)
         self.optimizer = tf.train.AdamOptimizer(settings['learning_rate'])
         self.train_op = self.optimizer.minimize(self.train_ops['cost'],
@@ -364,31 +503,59 @@ class EncoderTrainer(TrainerBase):
         plt.savefig(os.path.join(self.settings['outputDir'], "img_%02d_reconstructed.png" % uid))
 
     def onEpochEnd(self, sess, index):
-
         self.sample(sess, index)
+
+    def onTrainEnd(self, sess):
+        self.project(sess)
 
 class ClassifierTrainer(TrainerBase):
 
-    def __init__(self):
+    def __init__(self, model_fn):
         super(ClassifierTrainer, self).__init__()
 
-def train(settings, trainer, dataset):
+        self.model_fn = model_fn
 
-    trainer.makeGraph(settings, dataset)
+    def makeGraph(self, settings, dataset):
 
-    do_export = False
+        self.settings = settings
+        self.dataset = dataset
 
-    trainer.beforeSession();
-    with tf.Session() as sess:
-        if trainer.checkpointExists():
-            trainer.restore(sess)
-        else:
-            trainer.train(sess)
-            do_export = True
-        trainer.project(sess)
+        self.seed = tf.placeholder(tf.int64, shape=tuple(), name="seed")
 
-    if do_export:
-        trainer.export()
+        logging.info("create training graph")
+        featTrain, labelTrain, uidTrain = dataset.getTrain(settings['batch_size'], self.seed)
+        self.train_ops = self.model_fn(featTrain, labelTrain,
+            reuse=False, isTraining=True)
+
+        logging.info("create dev graph")
+        featDev, labelDev, uidDev = dataset.getDev(settings['batch_size'], self.seed)
+        self.dev_ops = self.model_fn(featDev, labelDev,
+            reuse=True, isTraining=False)
+
+        self.dev_metrics = ClassificationMetricsCalculator(
+            settings['nClasses'], dataset.iterDev.initializer,
+            self.dev_ops['logits'], labelDev)
+
+        logging.info("create test graph")
+        featTest, labelTest, uidTest = dataset.getTest()
+        self.test_ops = self.model_fn(featTest, labelTest,
+            reuse=True, isTraining=False)
+
+        self.test_metrics = ClassificationMetricsCalculator(
+            settings['nClasses'], dataset.iterTest.initializer,
+            self.test_ops['logits'], labelTest)
+
+        logging.info("create optimizer: adam")
+        self.global_step = tf.Variable(0, name='global_step', trainable=False)
+        self.optimizer = tf.train.AdamOptimizer(settings['learning_rate'])
+        self.train_op = self.optimizer.minimize(self.train_ops['cost'],
+            global_step=self.global_step)
+
+    def onEpochEnd(self, sess, index):
+        self.dev_metrics.run(sess)
+
+    def onTrainEnd(self, sess):
+        self.test_metrics.run(sess)
 
 def main():
     logging.basicConfig(level=logging.INFO)
@@ -439,9 +606,13 @@ def main():
     print(settings['dimensions'])
     print(dataset.train_path)
     # lstm_fn = lstm(nFeatures=28*28, nClasses=len(settings['classes']))
-    autoencoder_fn = autoencoder(dimensions=settings['dimensions'])
-    trainer = EncoderTrainer(autoencoder_fn)
-    train(settings, trainer, dataset)
+    #autoencoder_fn = autoencoder(dimensions=settings['dimensions'])
+    #trainer = EncoderTrainer(autoencoder_fn)
+    model_fn = lstm2(nClasses=len(settings['classes']),
+        nRecurrentUnits=100,
+        batch_size=settings['batch_size'])
+    trainer = ClassifierTrainer(model_fn)
+    trainer.run(settings, dataset)
 
 if __name__ == '__main__':
     main()
