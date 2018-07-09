@@ -1,9 +1,10 @@
-#! cd .. && python -m mlf.experiment
+#! cd .. && python36 -m mlf.experiment
 
 import os
 import sys
 import shutil
 import logging
+import shutil
 
 from .core.mnist import MnistDataset
 from .core.dataset import Dataset
@@ -12,6 +13,7 @@ from .models.autoencoder import autoencoder
 from .models.vae import vae_fn
 from .tools.freeze import freeze
 from .models.lstm2 import lstm2
+from .models.cnn import cnn
 
 import tensorflow as tf
 from tensorflow.contrib.tensorboard.plugins import projector
@@ -48,7 +50,7 @@ class AudioDataset(Dataset):
 class ClassificationMetricsCalculator(object):
     """docstring for ClassificationMetricsCalculator"""
     _counter = 0
-    def __init__(self, nClasses, initializer, logits, labels, name=None):
+    def __init__(self, nClasses, initializer, logits, labels, name=None, seed=None):
         super(ClassificationMetricsCalculator, self).__init__()
 
         if name is None:
@@ -61,6 +63,7 @@ class ClassificationMetricsCalculator(object):
         self.nClasses = nClasses
         self.logits = logits
         self.labels = labels
+        self.seed = seed
 
         self._init()
 
@@ -100,7 +103,7 @@ class ClassificationMetricsCalculator(object):
         self.op_update = (update_op_rec, update_op_prec, conf_mat_update)
         self.op_compute = (recall, precision, conf_mat)
 
-    def _streamingConfMatrix(prediction, label, nClasses):
+    def _streamingConfMatrix(self, prediction, label, nClasses):
 
         with tf.name_scope("conf_matrix"):
             # Compute a per-batch confusion
@@ -126,7 +129,11 @@ class ClassificationMetricsCalculator(object):
 
     def run(self, session):
 
-        session.run(self.op_init)
+        feed = {}
+        if self.seed is not None:
+            feed[self.seed] = 0
+
+        session.run(self.op_init, feed_dict=feed)
 
         try:
             while True:
@@ -212,11 +219,11 @@ class TrainerBase(object):
                     step += 1
 
                     _step = int(500 / self.settings['batch_size'])
-                    _scale = self.dataset.shape(None, flat=True)[-1]
+                    _scale = 1  # self.dataset.shape(None, flat=True)[-1]
 
                     _scale = _scale * step * self.settings['batch_size']
                     if step % _step == 0:
-                        print( epoch_i, step, total_cost/_scale)
+                        print(epoch_i, step, total_cost / _scale)
 
                     if self.settings['max_steps'] > 0 and \
                       step > self.settings['max_steps']:
@@ -261,8 +268,12 @@ class TrainerBase(object):
         batch_size = 1  # TODO, can this be None or -1 for arbitrary?
         shape = self.dataset.shape(batch_size, flat=True)
         featEval = tf.placeholder(tf.float32, shape, name='INPUT')
-        eval_ops = self.model_fn(featEval, None, reuse=False, isTraining=False)
+        shape = [self.settings['nClasses']]
+        labelEval = tf.placeholder(tf.float32, shape, name='INPUT_LABEL')
+        eval_ops = self.model_fn(featEval, labelEval, reuse=False, isTraining=False)
 
+        assert eval_ops['x'] is featEval
+        assert eval_ops['y'] is labelEval
         # -------------------------------------------------------------------------
         # Export model
         # -------------------------------------------------------------------------
@@ -288,15 +299,16 @@ class TrainerBase(object):
             )
 
         export_ops = list(eval_ops.values())
-        export_ops.insert(0,init_op)
+        export_ops.insert(0, init_op)
+        print(export_ops)
         export_names = ','.join([op.name.split(":")[0] for op in export_ops])
         ckpt = tf.train.latest_checkpoint(evalOutputDir)
-        print("-"*60)
+        print("-" * 60)
         print("path: %s" % modelPath)
         print("path: %s" % frozenModelPath)
         print("freeze: %s" % export_names)
         print("checkpint: %s" % ckpt)
-        print("-"*60)
+        print("-" * 60)
 
         # freeze weights along with the graph, so that it can be used
         # with the C API
@@ -318,7 +330,7 @@ class TrainerBase(object):
 
         self.makeGraph(settings, dataset)
 
-        do_export = False
+        do_export = True
 
         self.beforeSession()
         with tf.Session() as sess:
@@ -534,7 +546,7 @@ class ClassifierTrainer(TrainerBase):
 
         self.dev_metrics = ClassificationMetricsCalculator(
             settings['nClasses'], dataset.iterDev.initializer,
-            self.dev_ops['logits'], labelDev)
+            self.dev_ops['logits'], labelDev, seed=self.seed)
 
         logging.info("create test graph")
         featTest, labelTest, uidTest = dataset.getTest()
@@ -561,8 +573,7 @@ def main():
     logging.basicConfig(level=logging.INFO)
 
     cfg = AutoEncoderConfig()
-    cfg.load("./config/audio_2way.cfg")
-
+    cfg.load("./config/audio_10way.cfg")
 
     mnist_settings = {
         "dataDir": os.path.abspath("./build/data"),
@@ -570,37 +581,45 @@ def main():
         "modelFile": "model.pb",
         "classes": list(range(10)), # [4,9],
         "learning_rate": 0.001,
-        "nEpochs": 10,
-        "batch_size": 30,
+        "nEpochs": 1,
+        "batch_size": 100,
+        "max_steps": 500,
+        "n_test_samples": 5000,
+    }
+
+    audio_settings = {
+        "dataDir": os.path.abspath("./data"),
+        "outputDir": os.path.abspath("./build/experiment"),
+        "modelFile": "model.pb",
+        "classes": cfg.getGenres(),
+        "learning_rate": 0.001,
+        "nEpochs": 2,
+        "batch_size": 100,
         "max_steps": 0,
         "n_test_samples": 5000,
     }
 
-    #audio_settings = {
-    #    "dataDir": os.path.abspath("./data"),
-    #    "outputDir": os.path.abspath("./build/experiment"),
-    #    "modelFile": "model.pb",
-    #    "classes": cfg.getGenres(),
-    #    "learning_rate": 0.001,
-    #    "nEpochs": 10,
-    #    "batch_size": 30,
-    #    "max_steps": 0,
-    #    "n_test_samples": 5000,
-    #}
+    settings = audio_settings
 
-    settings = mnist_settings # audio_settings
+    settings['nClasses'] = len(settings['classes'])
+
+    if os.path.exists(settings['outputDir']):
+        if input("delete experiment? (y/N)").lower().startswith("y"):
+            shutil.rmtree(settings['outputDir'])
 
     settings['checkpointFile'] = os.path.join(settings['outputDir'], 'model.ckpt')
 
     if not os.path.exists(settings['dataDir']):
         os.makedirs(settings['dataDir'])
 
-    dataset = MnistDataset(settings['dataDir'], settings['classes'])
+    # dataset = MnistDataset(settings['dataDir'], settings['classes'])
 
-    # dataset = AudioDataset(cfg)
+    dataset = AudioDataset(cfg)
 
     _, nFeatures = dataset.shape(None, flat=True)
     settings['dimensions'] = [nFeatures, 128]
+
+    _, settings['nFeatures'], settings['nSlices'] = dataset.shape(None, flat=False)
 
     print(settings)
     print(settings['dimensions'])
@@ -608,9 +627,11 @@ def main():
     # lstm_fn = lstm(nFeatures=28*28, nClasses=len(settings['classes']))
     #autoencoder_fn = autoencoder(dimensions=settings['dimensions'])
     #trainer = EncoderTrainer(autoencoder_fn)
-    model_fn = lstm2(nClasses=len(settings['classes']),
-        nRecurrentUnits=100,
-        batch_size=settings['batch_size'])
+    #model_fn = lstm2(nClasses=len(settings['classes']),
+    #    nRecurrentUnits=100,
+    #    batch_size=settings['batch_size'])
+    model_fn = cnn(batch_size=settings['batch_size'],
+        nFeatures=settings['nFeatures'], nSlices=settings['nSlices'])
     trainer = ClassifierTrainer(model_fn)
     trainer.run(settings, dataset)
 

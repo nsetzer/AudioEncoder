@@ -12,6 +12,8 @@ class lstm2(Model):
             "nClasses": None,
             "nRecurrentUnits": 100,
             "batch_size": None,
+            "width": 28,  # should be none
+            "height": -1,
         }
         return settings
 
@@ -21,7 +23,9 @@ class lstm2(Model):
         n_hidden = self.settings['nRecurrentUnits']
 
         # TODO: pass in width and height
-        x = tf.reshape(x, [self.settings['batch_size'], -1, 28])
+        x = tf.reshape(x, [self.settings['batch_size'],
+            self.settings['height'],
+            self.settings['width']])
 
         wshape = [n_hidden, n_classes]
         weight = tf.Variable(tf.truncated_normal(wshape, stddev=0.1))
@@ -51,4 +55,5 @@ class lstm2(Model):
             "classes": output_all,
             "cost": cost,
         }
-        return opd
+        return ops
+

@@ -1,4 +1,4 @@
-#! cd ../.. && python -m mlf.core.feature_extractor
+#! cd ../.. && python36 -m mlf.core.feature_extractor
 
 
 """
@@ -458,6 +458,8 @@ def _create_test(cfg, fe, tefile):
 def main():
     cfg = AutoEncoderConfig()
     cfg.load("./config/audio_10way.cfg")
+
+    # todo: throw an error (in sigproc?) when ffmpeg cannot be found
 
     procs = SigProc.newRecipeManager(cfg.recipe_directory,
         ingest=cfg.ingest_mode,
