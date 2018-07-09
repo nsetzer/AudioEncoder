@@ -569,25 +569,32 @@ class ClassifierTrainer(TrainerBase):
     def onTrainEnd(self, sess):
         self.test_metrics.run(sess)
 
-def main():
+def run_experiment(settings, dataset, Trainer, model, keys):
+
+    settings['nClasses'] = len(settings['classes'])
+    settings['checkpointFile'] = os.path.join(settings['outputDir'],
+        'model.ckpt')
+
+    _, settings['nFeatures'], settings['nSlices'] = dataset.shape(None,
+        flat=False)
+
+    if os.path.exists(settings['outputDir']):
+        if input("delete experiment? (y/N)").lower().startswith("y"):
+            shutil.rmtree(settings['outputDir'])
+
+    cfg = {k: settings[k] for k in keys}
+    model_fn = model(**cfg)
+    trainer = Trainer(model_fn)
+    trainer.run(settings, dataset)
+
+def expr_audio_classification():
+
     logging.basicConfig(level=logging.INFO)
 
     cfg = AutoEncoderConfig()
     cfg.load("./config/audio_10way.cfg")
 
-    mnist_settings = {
-        "dataDir": os.path.abspath("./build/data"),
-        "outputDir": os.path.abspath("./build/experiment"),
-        "modelFile": "model.pb",
-        "classes": list(range(10)), # [4,9],
-        "learning_rate": 0.001,
-        "nEpochs": 1,
-        "batch_size": 100,
-        "max_steps": 500,
-        "n_test_samples": 5000,
-    }
-
-    audio_settings = {
+    settings = {
         "dataDir": os.path.abspath("./data"),
         "outputDir": os.path.abspath("./build/experiment"),
         "modelFile": "model.pb",
@@ -599,41 +606,57 @@ def main():
         "n_test_samples": 5000,
     }
 
-    settings = audio_settings
-
-    settings['nClasses'] = len(settings['classes'])
-
-    if os.path.exists(settings['outputDir']):
-        if input("delete experiment? (y/N)").lower().startswith("y"):
-            shutil.rmtree(settings['outputDir'])
-
-    settings['checkpointFile'] = os.path.join(settings['outputDir'], 'model.ckpt')
-
-    if not os.path.exists(settings['dataDir']):
-        os.makedirs(settings['dataDir'])
-
-    # dataset = MnistDataset(settings['dataDir'], settings['classes'])
-
     dataset = AudioDataset(cfg)
 
+    #keys = ['nClasses', 'nFeatures']
+    keys = ['batch_size', 'nFeatures', 'nSlices']
+    run_experiment(settings, dataset, ClassifierTrainer, cnn, keys)
+
+def expr_mnist_classification():
+
+    settings = {
+        "dataDir": os.path.abspath("./build/data"),
+        "outputDir": os.path.abspath("./build/experiment"),
+        "modelFile": "model.pb",
+        "classes": list(range(10)),  # [4,9],
+        "learning_rate": 0.001,
+        "nEpochs": 1,
+        "batch_size": 1,
+        "max_steps": 500,
+        "n_test_samples": 5000,
+    }
+
+    dataset = MnistDataset(settings['dataDir'], settings['classes'])
+
+    #keys = ['nClasses', 'nFeatures']
+    keys = ['batch_size', 'nFeatures', 'nSlices']
+    run_experiment(settings, dataset, ClassifierTrainer, cnn, keys)
+
+def expr_mnist_encoder():
+
+    settings = {
+        "dataDir": os.path.abspath("./build/data"),
+        "outputDir": os.path.abspath("./build/experiment"),
+        "modelFile": "model.pb",
+        "classes": list(range(10)),  # [4,9],
+        "learning_rate": 0.001,
+        "nEpochs": 1,
+        "batch_size": 100,
+        "max_steps": 0,
+        "n_test_samples": 5000,
+    }
+
+    dataset = MnistDataset(settings['dataDir'], settings['classes'])
+
     _, nFeatures = dataset.shape(None, flat=True)
-    settings['dimensions'] = [nFeatures, 128]
+    settings['dimensions'] = [nFeatures, 256, 128]
+    keys = ['dimensions']
+    run_experiment(settings, dataset, EncoderTrainer, autoencoder, keys)
 
-    _, settings['nFeatures'], settings['nSlices'] = dataset.shape(None, flat=False)
-
-    print(settings)
-    print(settings['dimensions'])
-    print(dataset.train_path)
-    # lstm_fn = lstm(nFeatures=28*28, nClasses=len(settings['classes']))
-    #autoencoder_fn = autoencoder(dimensions=settings['dimensions'])
-    #trainer = EncoderTrainer(autoencoder_fn)
-    #model_fn = lstm2(nClasses=len(settings['classes']),
-    #    nRecurrentUnits=100,
-    #    batch_size=settings['batch_size'])
-    model_fn = cnn(batch_size=settings['batch_size'],
-        nFeatures=settings['nFeatures'], nSlices=settings['nSlices'])
-    trainer = ClassifierTrainer(model_fn)
-    trainer.run(settings, dataset)
+def main():
+    # arguments may be: init clean build export
+    # maybe this *should* be called from an experiment directory?
+    expr_mnist_encoder()
 
 if __name__ == '__main__':
     main()

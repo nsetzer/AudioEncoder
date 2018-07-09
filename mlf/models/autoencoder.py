@@ -32,6 +32,8 @@ class autoencoder(Model):
         z : Tensor
             Inner-most latent representation
         y : Tensor
+            label for x
+        y_hat : Tensor
             Output reconstruction of the input
         cost : Tensor
             Overall cost to use for training
@@ -89,9 +91,12 @@ class autoencoder(Model):
                 current_input = output
 
         # Now have the reconstruction through the network
-        y = current_input
+        y_hat = current_input
 
         # Cost function measures pixel-wise difference
-        cost = tf.reduce_sum(tf.square(y - x), name="COST")
+        cost = tf.reduce_sum(tf.square(y_hat - x), name="COST")
 
-        return {'x': x, 'z': z, 'y': y, 'cost': cost}
+        return {'x': x, 'z': z, 'label': y, 'y': y_hat, 'cost': cost}
+
+
+

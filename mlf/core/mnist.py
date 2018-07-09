@@ -20,6 +20,9 @@ class MnistDataset(Dataset):
         super(MnistDataset, self).__init__()
         self.data_dir = data_dir
 
+        if not os.path.exists(data_dir):
+            os.makedirs(data_dir)
+
         self.classes = list(range(10)) if classes is None else classes
 
         self.train_path = os.path.join(self.data_dir,
