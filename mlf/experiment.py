@@ -10,7 +10,7 @@ from .core.mnist import MnistDataset
 from .core.dataset import Dataset
 from .core.config import AutoEncoderConfig
 from .models.autoencoder import autoencoder
-from .models.vae import vae_fn
+from .models.vae import vae
 from .tools.freeze import freeze
 from .models.lstm2 import lstm2
 from .models.cnn import cnn
@@ -50,7 +50,7 @@ class AudioDataset(Dataset):
 class ClassificationMetricsCalculator(object):
     """docstring for ClassificationMetricsCalculator"""
     _counter = 0
-    def __init__(self, nClasses, initializer, logits, labels, name=None, seed=None):
+    def __init__(self, outfile, nClasses, initializer, logits, labels, name=None, seed=None):
         super(ClassificationMetricsCalculator, self).__init__()
 
         if name is None:
@@ -64,6 +64,7 @@ class ClassificationMetricsCalculator(object):
         self.logits = logits
         self.labels = labels
         self.seed = seed
+        self.outfile = outfile
 
         self._init()
 
@@ -148,26 +149,58 @@ class ClassificationMetricsCalculator(object):
         confmat = np.array(confmat)
         F1 = 2 * ((precision * recall) / (precision + recall))
 
+        total = 0
+        correct = 0
+        incorrect = 0
+        errs = []
+        accs = []
+        for i in range(len(confmat)):
+            total_class = sum(confmat[i])
+            total += total_class
+            err = total_class - confmat[i][i]
+            incorrect += err
+            acc = confmat[i][i]
+            correct += acc
+            errs.append(err / total_class)
+            accs.append(acc / total_class)
+        err_mean = incorrect / total
+        acc_mean = correct / total
+
         srecall = ', '.join(["%0.6f" % v for v in recall])
         sprecision = ', '.join(["%0.6f" % v for v in precision])
         sF1 = ', '.join(["%0.6f" % v for v in F1])
 
-        print("recall   : (%.6f) %s" % (np.mean(recall), srecall))
-        print("precision: (%.6f) %s" % (np.mean(precision), sprecision))
-        print("F1       : (%.6f) %s" % (np.mean(F1), sF1))
+        serr = ', '.join(["%0.6f" % v for v in errs])
+        sacc = ', '.join(["%0.6f" % v for v in accs])
 
         # determine maximum vlaue in the confusion matrix, for alignment
         n = len("%s" % np.max(confmat))
         fmt = "%%%dd" % n
 
-        # print a header for the confusion matrix
-        s = " | ".join([fmt % i for i in range(self.nClasses)])
-        print(" " * n + "   " + s + " |")
+        with open(self.outfile, "a") as af:
+            def log(msg):
+                msg = msg + "\n"
+                sys.stdout.write(msg)
+                af.write(msg)
 
-        # print confusion matrix data
-        for i, row in enumerate(confmat):
-            s = " | ".join([fmt % v for v in row])
-            print(fmt % i + " | " + s + " |")
+            log("recall:    (%.6f) %s" % (np.mean(recall), srecall))
+            log("precision: (%.6f) %s" % (np.mean(precision), sprecision))
+            log("F1_score:  (%.6f) %s" % (np.mean(F1), sF1))
+            log("%%error:    (%.6f) %s" % (err_mean, serr))
+            log("accuracy:  (%.6f) %s" % (acc_mean, sacc))
+
+            log("row: actual class")
+            log("col: predicted class")
+
+            # print a header for the confusion matrix
+            s = " | ".join([fmt % i for i in range(self.nClasses)])
+            log(" " * n + "   " + s + " |")
+
+            # print confusion matrix data
+            for i, row in enumerate(confmat):
+                s = " | ".join([fmt % v for v in row])
+                log(fmt % i + " | " + s + " |")
+            log("\n")
 
 class TrainerBase(object):
 
@@ -544,9 +577,11 @@ class ClassifierTrainer(TrainerBase):
         self.dev_ops = self.model_fn(featDev, labelDev,
             reuse=True, isTraining=False)
 
+        metrics_file = os.path.join(settings['outputDir'], "metrics.txt")
         self.dev_metrics = ClassificationMetricsCalculator(
-            settings['nClasses'], dataset.iterDev.initializer,
-            self.dev_ops['logits'], labelDev, seed=self.seed)
+            metrics_file, settings['nClasses'],
+            dataset.iterDev.initializer, self.dev_ops['logits'],
+            labelDev, seed=self.seed)
 
         logging.info("create test graph")
         featTest, labelTest, uidTest = dataset.getTest()
@@ -554,8 +589,9 @@ class ClassifierTrainer(TrainerBase):
             reuse=True, isTraining=False)
 
         self.test_metrics = ClassificationMetricsCalculator(
-            settings['nClasses'], dataset.iterTest.initializer,
-            self.test_ops['logits'], labelTest)
+            metrics_file, settings['nClasses'],
+            dataset.iterTest.initializer, self.test_ops['logits'],
+            labelTest)
 
         logging.info("create optimizer: adam")
         self.global_step = tf.Variable(0, name='global_step', trainable=False)
@@ -592,7 +628,7 @@ def expr_audio_classification():
     logging.basicConfig(level=logging.INFO)
 
     cfg = AutoEncoderConfig()
-    cfg.load("./config/audio_10way.cfg")
+    cfg.load("./config/audio_10way_chroma.cfg")
 
     settings = {
         "dataDir": os.path.abspath("./data"),
@@ -621,9 +657,9 @@ def expr_mnist_classification():
         "classes": list(range(10)),  # [4,9],
         "learning_rate": 0.001,
         "nEpochs": 1,
-        "batch_size": 1,
-        "max_steps": 500,
-        "n_test_samples": 5000,
+        "batch_size": 100,
+        "max_steps": 50,
+        "n_test_samples": 2500,
     }
 
     dataset = MnistDataset(settings['dataDir'], settings['classes'])
@@ -656,7 +692,7 @@ def expr_mnist_encoder():
 def main():
     # arguments may be: init clean build export
     # maybe this *should* be called from an experiment directory?
-    expr_mnist_encoder()
+    expr_mnist_classification()
 
 if __name__ == '__main__':
     main()

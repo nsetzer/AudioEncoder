@@ -457,7 +457,7 @@ def _create_test(cfg, fe, tefile):
 
 def main():
     cfg = AutoEncoderConfig()
-    cfg.load("./config/audio_10way.cfg")
+    cfg.load("./config/audio_10way_chroma.cfg")
 
     # todo: throw an error (in sigproc?) when ffmpeg cannot be found
 

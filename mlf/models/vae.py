@@ -4,6 +4,7 @@ https://wiseodd.github.io/techblog/2016/12/10/variational-autoencoder/
 https://github.com/shaohua0116/VAE-Tensorflow
 """
 
+from .model import Model
 import tensorflow as tf
 import numpy as np
 
