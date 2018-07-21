@@ -3,6 +3,8 @@ from .model import Model
 import tensorflow as tf
 import numpy as np
 
+from tensorflow.contrib import rnn
+
 class lstm2(Model):
     def __init__(self, **kwargs):
         super(lstm2, self).__init__(**kwargs)
@@ -10,14 +12,58 @@ class lstm2(Model):
     def defaultSettings(self):
         settings = {
             "nClasses": None,
-            "nRecurrentUnits": 100,
             "batch_size": None,
-            "width": 28,  # should be none
-            "height": -1,
+            "nFeatures": None,
+            "nSlices": None,
+            "num_hidden": 512,
         }
         return settings
 
     def __call__(self, x, y, reuse=False, isTraining=False):
+        # https://colab.research.google.com/drive/18FqI18psdH30WUJ1uPd6zVgK2AwxO_Bj#scrollTo=GyGSqEoqa7r2
+
+        cfg = self.settings
+        # shape := [batch_size, height, width, 1]
+        shape = [-1, cfg['nFeatures'], cfg['nSlices']]
+        input_layer = tf.reshape(x, shape)
+
+        with tf.variable_scope('RNN', reuse=reuse):
+            # Define a lstm cell with tensorflow
+            lstm_cell = rnn.LSTMBlockCell(
+                self.settings['num_hidden'], forget_bias=1.0)
+
+            # Get lstm cell output
+            # outputs, states = rnn.static_rnn(lstm_cell, x, dtype=tf.float32)
+            outputs, states = tf.nn.dynamic_rnn(
+                cell=lstm_cell, inputs=input_layer, time_major=False, dtype=tf.float32)
+
+        with tf.variable_scope('LOGITS', reuse=reuse):
+
+            output_layer = tf.layers.Dense(
+                self.settings['nClasses'], activation=None,
+                kernel_initializer=tf.orthogonal_initializer()
+            )
+
+            logits = output_layer(tf.layers.batch_normalization(outputs[:, -1, :]))
+
+            classes = tf.argmax(input=logits, axis=1)
+            probabilities = tf.nn.softmax(logits, name="softmax_tensor")
+
+            loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(
+                        logits=logits, labels=y))
+
+        ops = {
+            "x": x,
+            "y": y,
+            "logits": logits,
+            "prediction": probabilities,
+            "classes": classes,
+            "cost": loss,
+        }
+
+        return ops
+
+    def __x__call__(self, x, y, reuse=False, isTraining=False):
 
         n_classes = self.settings['nClasses']
         n_hidden = self.settings['nRecurrentUnits']

@@ -173,6 +173,8 @@ class Dataset(object):
     def oneHot2Label(self, y):
         raise NotImplementedError()
 
+    def exportConfig(self):
+        return {}
 def _example_parser(example):
 
     proto = {

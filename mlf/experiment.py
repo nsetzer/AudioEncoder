@@ -7,7 +7,7 @@ import logging
 import shutil
 
 from .core.mnist import MnistDataset
-from .core.dataset import Dataset
+from .core.audio import AudioDataset
 from .core.config import AutoEncoderConfig
 from .models.autoencoder import autoencoder
 from .models.vae import vae
@@ -22,30 +22,12 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import json
 
 try:
     from SigProc.histogrammer import AutomaticScale
 except ImportError as e:
     print(e)
-
-class AudioDataset(Dataset):
-    def __init__(self, cfg):
-        super(AudioDataset, self).__init__()
-        self.cfg = cfg
-
-        # the image was transposed (from the sigproc output)
-        # first dimension (column) is a feature
-        # second dimension (row) is time
-        self.feat_width = self.cfg.featureHeight()
-        self.feat_height = self.cfg.sliceSize
-
-        self.train_path = self.cfg.getDatasetGlobPattern("train")
-        self.dev_path = self.cfg.getDatasetGlobPattern("dev")
-        self.test_path = self.cfg.getDatasetGlobPattern("test")
-
-    def oneHot2Label(self, y):
-        index = np.where(np.asarray(y) == 1)[0][0]
-        return self.cfg.getGenres()[index]
 
 class ClassificationMetricsCalculator(object):
     """docstring for ClassificationMetricsCalculator"""
@@ -235,6 +217,9 @@ class TrainerBase(object):
             as_text=True
         )
 
+        final_cost_train = []
+        final_cost_dev = []
+
         for epoch_i in range(self.settings['nEpochs']):
 
             sess.run(self.dataset.initializer(),
@@ -242,51 +227,125 @@ class TrainerBase(object):
 
             self.onEpochBegin(sess, epoch_i)
 
-            step = 0
-            total_cost = 0
-            while True:
-                try:
-                    _, cost = sess.run([self.train_op,
-                        self.train_ops['cost']])
-                    total_cost += cost
-                    step += 1
+            train_cost, train_points = self._epoch_train_step(sess, epoch_i)
+            final_cost_train.append((epoch_i, train_cost))
+            print("final train cost: %f" % train_cost)
 
-                    _step = int(500 / self.settings['batch_size'])
-                    _scale = 1  # self.dataset.shape(None, flat=True)[-1]
+            dev_cost, dev_points = self._epoch_dev_step(sess, epoch_i)
+            final_cost_dev.append((epoch_i, dev_cost))
+            print("final dev cost: %f" % dev_cost)
 
-                    _scale = _scale * step * self.settings['batch_size']
-                    if step % _step == 0:
-                        print(epoch_i, step, total_cost / _scale)
-
-                    if self.settings['max_steps'] > 0 and \
-                      step > self.settings['max_steps']:
-                        break
-                except tf.errors.OutOfRangeError:
-                    break
-
-            costs = []
-            while True:
-                try:
-                    costs.append(sess.run(self.dev_ops['cost']))
-                except tf.errors.OutOfRangeError:
-                    break
-
-            print(epoch_i, np.sum(costs), np.mean(costs),
-                np.max(costs), np.min(costs))
+            self._write_cost_graph("%03d" % epoch_i, train_points, dev_points)
 
             self.saver.save(sess, self.settings['checkpointFile'],
                 global_step=epoch_i)
 
             self.onEpochEnd(sess, epoch_i)
 
+        # write a final graph showing cost as a function of epoch
+        self._write_cost_graph("final", final_cost_train, final_cost_dev)
+
+    def _epoch_train_step(self, sess, epoch_i):
+        """
+        train a single epoch
+        train on all available samples, periodically print the
+        training cost
+        """
+
+        epoch_cost = []
+        step = 0
+        total_cost = 0
+        while True:
+            try:
+                # train on a single batch
+                # record the value loss/cost function
+                _, cost = sess.run([self.train_op,
+                    self.train_ops['cost']])
+                total_cost += cost
+                step += 1
+
+                # periodically print out the cost
+                # TODO: consider printing out every 15 seconds
+                update_period = int(500 / self.settings['batch_size'])
+
+                x = step * self.settings['batch_size']
+                if step % update_period == 0:
+                    y = total_cost / x
+                    msg = "%2d: step: %5d cost: %.7f"
+                    print(msg % (epoch_i, step, total_cost / x))
+                    epoch_cost.append((x, y))
+
+                if self.settings['max_steps'] > 0 and \
+                  step > self.settings['max_steps']:
+                    break
+            except tf.errors.OutOfRangeError:
+                break
+
+        mean_cost = total_cost / (step * self.settings['batch_size'])
+        return mean_cost, epoch_cost
+
+    def _epoch_dev_step(self, sess, epoch_i):
+
+        epoch_cost = []
+        step = 0
+        total_cost = 0
+        while True:
+            try:
+                cost = sess.run(self.dev_ops['cost'])
+                total_cost += cost
+                step += 1
+
+                update_period = int(500 / self.settings['batch_size'])
+                if step % update_period == 0:
+
+                    x = step * self.settings['batch_size']
+                    y = total_cost / x
+                    epoch_cost.append((x, y))
+
+                    sys.stdout.write(".")
+                    sys.stdout.flush()
+
+                break;
+            except tf.errors.OutOfRangeError:
+                break
+        sys.stdout.write("\n")
+
+        x = step * self.settings['batch_size']
+        msg = "%2d: dev: step: %5d cost: %.7f"
+        print(msg % (epoch_i, step, total_cost / x))
+
+        mean_cost = total_cost / (step * self.settings['batch_size'])
+        return mean_cost, epoch_cost
+
+    def _write_cost_graph(self, tag, points_train, points_dev):
+        """
+        save a json file containing the points for plotting two graphs
+        points should be an array of (x,y) pairs
+        """
+        jo = {
+            "mode": "multiline",
+            "data": {"train": points_train, "dev": points_dev},
+            "xlabel": "#Samples",
+            "ylabel": "Cost",
+            "title": "Train Cost for Epoch %s" % tag,
+        }
+
+        path = os.path.join(self.settings['outputDir'],
+            "epoch_cost_%s.json" % tag)
+
+        with open(path, "w") as wf:
+            json.dump(jo, wf, sort_keys=True, indent=2)
+
     def export(self, ckpt=None):
         """
 
         """
 
-        ckpt = ckpt or tf.train.latest_checkpoint(self.settings['outputDir'])
+        frozen_name = "frozen_model"
 
-        logging.info("Exporting model using %s" % ckpt)
+        tr_ckpt = ckpt or tf.train.latest_checkpoint(self.settings['outputDir'])
+
+        logging.info("Exporting model using %s" % tr_ckpt)
 
         tf.reset_default_graph()
 
@@ -313,13 +372,13 @@ class TrainerBase(object):
         saver = tf.train.Saver()
         modelFile = 'model.pbtxt'
         modelPath = os.path.join(evalOutputDir, modelFile)
-        frozenModelPath = os.path.join(evalOutputDir, "frozen_model.pb")
+        frozenModelPath = os.path.join(evalOutputDir, "%s.pb" % frozen_name)
 
         model_ckpt = os.path.join(evalOutputDir, 'model.ckpt')
         with tf.Session() as sess:
             sess.run(init_op)
 
-            saver.restore(sess, ckpt)
+            saver.restore(sess, tr_ckpt)
 
             saver.save(sess, model_ckpt,
                        write_meta_graph=False)
@@ -335,17 +394,34 @@ class TrainerBase(object):
         export_ops.insert(0, init_op)
         print(export_ops)
         export_names = ','.join([op.name.split(":")[0] for op in export_ops])
-        ckpt = tf.train.latest_checkpoint(evalOutputDir)
+
+        # get the actual file path of the frozen checkpoint
+        frozen_ckpt = tf.train.latest_checkpoint(evalOutputDir)
         print("-" * 60)
         print("path: %s" % modelPath)
         print("path: %s" % frozenModelPath)
         print("freeze: %s" % export_names)
-        print("checkpint: %s" % ckpt)
+        print("checkpoint: %s" % frozen_ckpt)
         print("-" * 60)
+
+        path = os.path.join(evalOutputDir,
+            "%s.json" % frozen_name)
+
+        tensors = {name: op.name for name, op in eval_ops.items()}
+        ops = {'init': init_op.name, }
+        jo = {
+            "checkpoint": tr_ckpt,
+            "tensors": tensors,
+            "operations": ops,
+            "shape": self.dataset.shape(batch_size, flat=False),
+            "dataset": self.dataset.exportConfig()
+        }
+        with open(path, "w") as wf:
+            json.dump(jo, wf, sort_keys=True, indent=2)
 
         # freeze weights along with the graph, so that it can be used
         # with the C API
-        freeze(modelPath, frozenModelPath, ckpt, export_names)
+        freeze(modelPath, frozenModelPath, frozen_ckpt, export_names)
 
     def onEpochBegin(self, sess, index):
         pass
@@ -600,10 +676,12 @@ class ClassifierTrainer(TrainerBase):
             global_step=self.global_step)
 
     def onEpochEnd(self, sess, index):
-        self.dev_metrics.run(sess)
+        # self.dev_metrics.run(sess)
+        pass
 
     def onTrainEnd(self, sess):
-        self.test_metrics.run(sess)
+        # self.test_metrics.run(sess)
+        pass
 
 def run_experiment(settings, dataset, Trainer, model, keys):
 
@@ -615,7 +693,7 @@ def run_experiment(settings, dataset, Trainer, model, keys):
         flat=False)
 
     if os.path.exists(settings['outputDir']):
-        if input("delete experiment? (y/N)").lower().startswith("y"):
+        if input("delete experiment? (y/N): ").lower().startswith("y"):
             shutil.rmtree(settings['outputDir'])
 
     cfg = {k: settings[k] for k in keys}
@@ -628,7 +706,7 @@ def expr_audio_classification():
     logging.basicConfig(level=logging.INFO)
 
     cfg = AutoEncoderConfig()
-    cfg.load("./config/audio_10way_chroma.cfg")
+    cfg.load("./config/audio_10way.cfg")
 
     settings = {
         "dataDir": os.path.abspath("./data"),
@@ -636,17 +714,22 @@ def expr_audio_classification():
         "modelFile": "model.pb",
         "classes": cfg.getGenres(),
         "learning_rate": 0.001,
-        "nEpochs": 2,
-        "batch_size": 100,
-        "max_steps": 0,
+        "nEpochs": 1,
+        "batch_size": 50,
+        "max_steps": 20,
         "n_test_samples": 5000,
     }
 
     dataset = AudioDataset(cfg)
 
-    #keys = ['nClasses', 'nFeatures']
-    keys = ['batch_size', 'nFeatures', 'nSlices']
-    run_experiment(settings, dataset, ClassifierTrainer, cnn, keys)
+    model = cnn
+
+    if model is lstm2:
+        keys = ['nClasses', 'batch_size', 'nFeatures', 'nSlices']
+    elif model is cnn:
+        keys = ['batch_size', 'nFeatures', 'nSlices']
+
+    run_experiment(settings, dataset, ClassifierTrainer, model, keys)
 
 def expr_mnist_classification():
 
@@ -675,7 +758,7 @@ def expr_mnist_encoder():
         "outputDir": os.path.abspath("./build/experiment"),
         "modelFile": "model.pb",
         "classes": list(range(10)),  # [4,9],
-        "learning_rate": 0.001,
+        "learning_rate": 0.01,
         "nEpochs": 1,
         "batch_size": 100,
         "max_steps": 0,
@@ -692,7 +775,7 @@ def expr_mnist_encoder():
 def main():
     # arguments may be: init clean build export
     # maybe this *should* be called from an experiment directory?
-    expr_mnist_classification()
+    expr_audio_classification()
 
 if __name__ == '__main__':
     main()

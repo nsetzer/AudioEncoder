@@ -159,13 +159,13 @@ class FeatureExtractor(object):
 
     # -------------------------------------------------------------------------
 
-    def _runSigProc(self, inFile):
+    def _runSigProc(self, inFilePath):
         """
         run the SigProc recipe on the given input file
 
         recipe is expected to return a SigProc.Matrix
         """
-        proc_runner = SigProc.PipelineProcessRunner(self.procs, inFile)
+        proc_runner = SigProc.PipelineProcessRunner(self.procs, inFilePath)
         # results is an array of the output from each step in the process
         # we only care about the output from the last step
         results = proc_runner.run()
@@ -370,7 +370,6 @@ class FeatureExtractor(object):
             nframes = fptr_saver(genre, frames, label)
             print("nframes %s %d" % (genre, nframes))
 
-
 def save_train_dev(cfg, ntrain, ndev, genre, frames, label):
 
     train_path = cfg.getDatasetPath("train", genre)
@@ -457,7 +456,7 @@ def _create_test(cfg, fe, tefile):
 
 def main():
     cfg = AutoEncoderConfig()
-    cfg.load("./config/audio_10way_chroma.cfg")
+    cfg.load("./config/audio_10way.cfg")
 
     # todo: throw an error (in sigproc?) when ffmpeg cannot be found
 
